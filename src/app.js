@@ -35,7 +35,7 @@ function createApp() {
   })));
   app.use(rateLimit({ windowMs: 60 * 1000, limit: 120, standardHeaders: 'draft-7', legacyHeaders: false }));
 
-  app.get('/health', (req, res) => res.json({ success: true, service: 'firebox-azure-agent', status: 'healthy' }));
+  app.get('/health', (req, res) => res.json({ success: true, service: 'firebox-azure-agent', status: 'healthy', version: process.env.AGENT_BUILD_VERSION || 'unknown', runtimes: ['docker', 'node'] }));
   app.use('/api', requireAgentAuth);
   app.use('/api/projects', projectsRoutes);
   app.use('/api/jobs', jobsRoutes);

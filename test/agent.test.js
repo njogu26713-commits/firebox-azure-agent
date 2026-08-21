@@ -29,7 +29,12 @@ async function request(path, options) {
 test('health endpoint is public and does not expose secrets', async () => {
   const { response, body } = await request('/health');
   assert.equal(response.status, 200);
-  assert.deepEqual(body, { success: true, service: 'firebox-azure-agent', status: 'healthy' });
+  assert.equal(body.success, true);
+  assert.equal(body.service, 'firebox-azure-agent');
+  assert.equal(body.status, 'healthy');
+  assert.equal(body.version, 'unknown');
+  assert.deepEqual(body.runtimes, ['docker', 'node']);
+  assert.equal(JSON.stringify(body).includes(process.env.FIREBOX_AGENT_SECRET || 'super-secret'), false);
 });
 
 test('project creation and safe file operations work', async () => {
