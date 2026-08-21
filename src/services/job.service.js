@@ -1,7 +1,6 @@
 const { spawn } = require('child_process');
 const { randomUUID } = require('crypto');
 const fs = require('fs');
-const { config } = require('../config');
 const { projectDirectory } = require('./safe-path.service');
 
 const jobs = new Map();
@@ -61,13 +60,37 @@ function runCommand(job, command, args, options = {}) {
   });
 }
 
-function allowedBuildSteps(runtime, packageManager, projectId) {
+function allowedBuildSteps(runtime, packageManager, projectId, options = {}) {
   if (runtime === 'docker') return [{ command: 'docker', args: ['build', '-t', `firebox-${projectId}:latest`, '.'] }];
   const manager = ['npm', 'pnpm', 'yarn'].includes(packageManager) ? packageManager : 'npm';
-  return [
-    { command: manager, args: manager === 'npm' ? ['ci'] : ['install', '--frozen-lockfile'] },
-    { command: manager, args: ['run', 'build'] },
-  ];
+  const lockfile = manager === 'npm' ? fs.existsSync(`${projectDirectory(projectId)}/package-lock.json`) : manager === 'pnpm' ? fs.existsSync(`${projectDirectory(projectId)}/pnpm-lock.yaml`) : fs.existsSync(`${projectDirectory(projectId)}/yarn.lock`);
+  const installArgs = manager === 'npm' ? (lockfile ? ['ci'] : ['install']) : ['install', '--frozen-lockfile'];
+  const steps = [{ command: manager, args: installArgs }];
+  if (options.hasBuildScript) steps.push({ command: manager, args: ['run', 'build'] });
+  return steps;
+}
+
+function validPort(value) {
+  const port = Number(value || 3000);
+  return Number.isInteger(port) && port >= 1 && port <= 65535 ? port : null;
+}
+
+async function waitForHealth(port, healthPath = '/') {
+  const safePath = String(healthPath || '/').startsWith('/') && !/[\s\r\n]/.test(String(healthPath || '/')) ? String(healthPath || '/') : '/';
+  let lastError;
+  for (let attempt = 0; attempt < 15; attempt += 1) {
+    try {
+      const response = await fetch(`http://127.0.0.1:${port}${safePath}`, { signal: AbortSignal.timeout(2000) });
+      if (response.ok) return;
+      lastError = new Error(`Health check returned HTTP ${response.status}.`);
+    } catch (error) {
+      lastError = error;
+    }
+    await new Promise((resolve) => setTimeout(resolve, 1000));
+  }
+  const error = new Error(`Application health check failed on port ${port}${safePath}: ${lastError?.message || 'no response'}`);
+  error.statusCode = 422;
+  throw error;
 }
 
 async function executeBuild(job, options = {}) {
@@ -77,7 +100,7 @@ async function executeBuild(job, options = {}) {
     error.statusCode = 404;
     throw error;
   }
-  const steps = allowedBuildSteps(options.runtime, options.packageManager, job.projectId);
+  const steps = allowedBuildSteps(options.runtime, options.packageManager, job.projectId, options);
   for (const step of steps) {
     job.stage = step.args.includes('build') || step.args.includes('--build') ? 'building' : 'preparing';
     await runCommand(job, step.command, step.args, { cwd: directory });
@@ -93,8 +116,27 @@ async function executeBuild(job, options = {}) {
     await runCommand(job, 'docker', ['rm', '-f', container], { cwd: directory, allowFailure: true });
     await runCommand(job, 'docker', ['run', '-d', '--restart', 'unless-stopped', '--name', container, '--cap-drop', 'ALL', '--security-opt', 'no-new-privileges:true', '-p', `127.0.0.1:${port}:${port}`, `firebox-${job.projectId}:latest`], { cwd: directory });
     job.stage = 'running';
+  } else if (options.runtime === 'node' && options.deploy) {
+    const port = validPort(options.port);
+    if (!port) {
+      const error = new Error('Node deployment port must be an integer between 1 and 65535.');
+      error.statusCode = 400;
+      throw error;
+    }
+    if (!options.hasStartScript) {
+      const error = new Error('Node deployment requires a package.json start script.');
+      error.statusCode = 422;
+      throw error;
+    }
+    const processName = `firebox-${job.projectId}`;
+    job.stage = 'starting';
+    await runCommand(job, 'pm2', ['delete', processName], { cwd: directory, allowFailure: true });
+    await runCommand(job, 'pm2', ['start', 'npm', '--name', processName, '--cwd', directory, '--', 'run', 'start'], { cwd: directory, env: { PORT: String(port), NODE_ENV: 'production' } });
+    await runCommand(job, 'pm2', ['save', '--force'], { cwd: directory, allowFailure: true });
+    await waitForHealth(port, options.healthPath || '/');
+    job.stage = 'running';
   } else {
-    job.stage = options.runtime === 'docker' ? 'built' : 'built';
+    job.stage = 'built';
   }
 }
 

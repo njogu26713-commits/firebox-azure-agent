@@ -44,16 +44,25 @@ router.post('/:projectId/build', asyncRoute(async (req, res) => {
 }));
 
 router.post('/:projectId/deploy', asyncRoute(async (req, res) => {
-  const runtime = req.body?.runtime;
-  if (runtime !== 'docker') {
-    const error = new Error('Only the Docker deployment runtime is enabled in this agent version. Use the build endpoint for Node projects until a process supervisor is configured.');
+  const runtime = req.body?.runtime === 'docker' ? 'docker' : req.body?.runtime === 'node' ? 'node' : '';
+  if (!runtime) {
+    const error = new Error('A supported deployment runtime is required: docker or node.');
     error.statusCode = 422;
     throw error;
   }
+  const packageManager = ['npm', 'pnpm', 'yarn'].includes(req.body?.packageManager) ? req.body.packageManager : 'npm';
   const job = jobService.startJob({
     projectId: req.params.projectId,
     type: 'deploy',
-    runner: (job) => jobService.executeBuild(job, { runtime: 'docker', deploy: true, port: req.body?.port }),
+    runner: (job) => jobService.executeBuild(job, {
+      runtime,
+      deploy: true,
+      port: req.body?.port,
+      healthPath: req.body?.healthPath,
+      packageManager,
+      hasBuildScript: req.body?.hasBuildScript === true,
+      hasStartScript: req.body?.hasStartScript === true,
+    }),
   });
   res.status(202).json({ success: true, ...job });
 }));
