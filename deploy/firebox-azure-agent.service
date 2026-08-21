@@ -1,0 +1,21 @@
+[Unit]
+Description=Firebox Azure Agent
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=firebox-agent
+Group=firebox-agent
+WorkingDirectory=/opt/firebox-azure-agent
+EnvironmentFile=/etc/firebox-azure-agent.env
+ExecStart=/usr/bin/node /opt/firebox-azure-agent/src/server.js
+Restart=always
+RestartSec=5
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectHome=true
+ReadWritePaths=/opt/firebox
+
+[Install]
+WantedBy=multi-user.target
